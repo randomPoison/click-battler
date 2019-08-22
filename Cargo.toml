@@ -6,7 +6,9 @@ edition = "2018"
 
 [dependencies]
 warp = "0.1.19"
-futures = "0.1.28"
+futures-preview = { version = "=0.3.0-alpha.18", features = ["compat"] }
 pretty_env_logger = "0.3"
 serde_derive = "1.0"
 handlebars = "1.0.0"
+runtime = { git = "https://github.com/rustasync/runtime" }
+runtime-tokio = { git = "https://github.com/rustasync/runtime" }

@@ -1,4 +1,3 @@
-#![deny(warnings)]
 extern crate futures;
 extern crate pretty_env_logger;
 extern crate warp;
@@ -9,8 +8,9 @@ use std::sync::{
     Arc, Mutex,
 };
 
-use futures::sync::mpsc;
-use futures::{Future, Stream};
+use futures::channel::mpsc;
+use futures::compat::*;
+use futures::prelude::*;
 use warp::ws::{Message, WebSocket};
 use warp::Filter;
 
@@ -23,7 +23,8 @@ static NEXT_USER_ID: AtomicUsize = AtomicUsize::new(1);
 /// - Value is a sender of `warp::ws::Message`
 type Users = Arc<Mutex<HashMap<usize, mpsc::UnboundedSender<Message>>>>;
 
-fn main() {
+#[runtime::main(runtime_tokio::Tokio)]
+async fn main() {
     pretty_env_logger::init();
 
     // Keep track of all connected users, key is usize, value
@@ -39,7 +40,7 @@ fn main() {
         .and(users)
         .map(|ws: warp::ws::Ws2, users| {
             // This will call our function if the handshake succeeds.
-            ws.on_upgrade(move |socket| user_connected(socket, users))
+            ws.on_upgrade(move |socket| Compat::new(Box::pin(user_connected(socket, users))))
         });
 
     // GET / -> index html
@@ -47,27 +48,30 @@ fn main() {
 
     let routes = index.or(chat);
 
-    warp::serve(routes).run(([127, 0, 0, 1], 3030));
+    runtime::spawn(warp::serve(routes).bind(([127, 0, 0, 1], 3030)).compat())
+        .await
+        .expect("I guess an error happened in the server");
 }
 
-fn user_connected(ws: WebSocket, users: Users) -> impl Future<Item = (), Error = ()> {
+async fn user_connected(ws: WebSocket, users: Users) -> Result<(), ()> {
     // Use a counter to assign a new unique ID for this user.
     let my_id = NEXT_USER_ID.fetch_add(1, Ordering::Relaxed);
 
     eprintln!("new chat user: {}", my_id);
 
     // Split the socket into a sender and receive of messages.
-    let (user_ws_tx, user_ws_rx) = ws.split();
+    let (mut user_ws_tx, mut user_ws_rx) = ws.sink_compat().split();
 
     // Use an unbounded channel to handle buffering and flushing of messages
     // to the websocket...
-    let (tx, rx) = mpsc::unbounded();
-    warp::spawn(
-        rx.map_err(|()| -> warp::Error { unreachable!("unbounded rx never errors") })
-            .forward(user_ws_tx)
-            .map(|_tx_rx| ())
-            .map_err(|ws_err| eprintln!("websocket send error: {}", ws_err)),
-    );
+    let (tx, mut rx) = mpsc::unbounded();
+    runtime::spawn(async move {
+        while let Some(item) = rx.next().await {
+            if let Err(err) = user_ws_tx.send(item).await {
+                eprintln!("websocket send error: {}", err);
+            }
+        }
+    });
 
     // Save the sender in our list of connected users.
     users.lock().unwrap().insert(my_id, tx);
@@ -78,23 +82,15 @@ fn user_connected(ws: WebSocket, users: Users) -> impl Future<Item = (), Error =
     // Make an extra clone to give to our disconnection handler...
     let users2 = users.clone();
 
-    user_ws_rx
-        // Every time the user sends a message, broadcast it to
-        // all other users...
-        .for_each(move |msg| {
-            user_message(my_id, msg, &users);
-            Ok(())
-        })
-        // for_each will keep processing as long as the user stays
-        // connected. Once they disconnect, then...
-        .then(move |result| {
-            user_disconnected(my_id, &users2);
-            result
-        })
-        // If at any time, there was a websocket error, log here...
-        .map_err(move |e| {
-            eprintln!("websocket error(uid={}): {}", my_id, e);
-        })
+    while let Some(msg_result) = user_ws_rx.next().await {
+        match msg_result {
+            Ok(msg) => user_message(my_id, msg, &users),
+            Err(err) => eprintln!("websocket error(uid={}): {}", my_id, err),
+        }
+    }
+    user_disconnected(my_id, &users2);
+
+    Ok(())
 }
 
 fn user_message(my_id: usize, msg: Message, users: &Users) {
