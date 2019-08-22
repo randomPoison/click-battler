@@ -1,7 +1,7 @@
-use actix::prelude::*;
-use actix_web_actors::ws;
+use futures::channel::mpsc::UnboundedSender;
 use log::*;
 use std::{collections::HashMap, sync::atomic::*};
+use warp::ws;
 
 #[derive(Debug)]
 pub struct GameController {
@@ -17,29 +17,31 @@ impl GameController {
         }
     }
 
-    pub fn generate_player_id(&self) -> PlayerId {
+    pub fn next_player_id(&self) -> PlayerId {
         let id = self.id_counter.fetch_add(1, Ordering::SeqCst);
         PlayerId(id)
     }
-}
 
-impl Actor for GameController {
-    type Context = Context<Self>;
-}
-
-impl Handler<ClientConnected> for GameController {
-    type Result = MessageResult<ClientConnected>;
-
-    fn handle(&mut self, _message: ClientConnected, _ctx: &mut Self::Context) -> Self::Result {
+    pub fn handle_client_connected(&mut self, sender: UnboundedSender<ws::Message>) -> PlayerId {
         // Create a new player for the client and add it to the set of players.
-        let id = self.generate_player_id();
-        let player = Player {
-            id,
-            health: 10,
-        };
+        let id = self.next_player_id();
+        let player = Player { id, health: 10 };
         self.players.insert(id, player);
 
-        MessageResult(CreatePlayer(id))
+        id
+    }
+
+    pub fn handle_client_disconnected(&mut self, id: PlayerId) {
+        // TODO: Maybe do something about that?
+        info!("good bye user: {:?}", id);
+    }
+
+    pub fn player(&self, id: PlayerId) -> Option<&Player> {
+        self.players.get(&id)
+    }
+
+    pub fn player_mut(&mut self, id: PlayerId) -> Option<&mut Player> {
+        self.players.get_mut(&id)
     }
 }
 
@@ -53,10 +55,3 @@ pub struct Player {
     // The player's current health.
     pub health: u32,
 }
-
-#[derive(Debug, Message)]
-#[rtype(CreatePlayer)]
-pub struct ClientConnected;
-
-#[derive(Debug, Message)]
-pub struct CreatePlayer(pub PlayerId);
