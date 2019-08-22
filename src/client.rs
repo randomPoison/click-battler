@@ -1,135 +1,69 @@
-//! Simple websocket client.
-use std::time::Duration;
-use std::{io, thread};
+//! Logic for managing client connections.
 
-use actix::io::SinkWrite;
-use actix::*;
-use actix_codec::{AsyncRead, AsyncWrite, Framed};
-use awc::{
-    error::WsProtocolError,
-    ws::{Codec, Frame, Message},
-    Client,
-};
-use futures::{
-    lazy,
-    stream::{SplitSink, Stream},
-    Future,
-};
+use actix::prelude::*;
+use actix_web_actors::ws;
+use log::*;
+use std::time::{Duration, Instant};
+use crate::game::GameController;
 
-fn main() {
-    ::std::env::set_var("RUST_LOG", "actix_web=info");
-    let _ = env_logger::init();
-    let sys = actix::System::new("ws-example");
+/// How often heartbeat pings are sent
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
-    Arbiter::spawn(lazy(|| {
-        Client::new()
-            .ws("http://127.0.0.1:8080/ws/")
-            .connect()
-            .map_err(|e| {
-                println!("Error: {}", e);
-                ()
-            })
-            .map(|(response, framed)| {
-                println!("{:?}", response);
-                let (sink, stream) = framed.split();
-                let addr = ChatClient::create(|ctx| {
-                    ChatClient::add_stream(stream, ctx);
-                    ChatClient(SinkWrite::new(sink, ctx))
-                });
+/// How long before lack of client response causes a timeout
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 
-                // start console loop
-                thread::spawn(move || loop {
-                    let mut cmd = String::new();
-                    if io::stdin().read_line(&mut cmd).is_err() {
-                        println!("error");
-                        return;
-                    }
-                    addr.do_send(ClientCommand(cmd));
-                });
+pub struct ClientSocket {
+    /// The time the last heartbeat was received from the client.
+    heartbeat: Instant,
 
-                ()
-            })
-    }));
-
-    let _ = sys.run();
+    /// The address of the game controller.
+    game_controller: Addr<GameController>,
 }
 
-struct ChatClient<T>(SinkWrite<SplitSink<Framed<T, Codec>>>)
-where
-    T: AsyncRead + AsyncWrite;
-
-#[derive(Message)]
-struct ClientCommand(String);
-
-impl<T: 'static> Actor for ChatClient<T>
-where
-    T: AsyncRead + AsyncWrite,
-{
-    type Context = Context<Self>;
-
-    fn started(&mut self, ctx: &mut Context<Self>) {
-        // start heartbeats otherwise server will disconnect after 10 seconds
-        self.hb(ctx)
+impl ClientSocket {
+    pub fn new(game_controller: Addr<GameController>) -> Self {
+        ClientSocket { heartbeat: Instant::now(), game_controller }
     }
 
-    fn stopped(&mut self, _: &mut Context<Self>) {
-        println!("Disconnected");
-
-        // Stop application on disconnect
-        System::current().stop();
-    }
-}
-
-impl<T: 'static> ChatClient<T>
-where
-    T: AsyncRead + AsyncWrite,
-{
-    fn hb(&self, ctx: &mut Context<Self>) {
-        ctx.run_later(Duration::new(1, 0), |act, ctx| {
-            act.0.write(Message::Ping(String::new())).unwrap();
-            act.hb(ctx);
-
-            // client should also check for a timeout here, similar to the
-            // server code
-        });
-    }
-}
-
-/// Handle stdin commands
-impl<T: 'static> Handler<ClientCommand> for ChatClient<T>
-where
-    T: AsyncRead + AsyncWrite,
-{
-    type Result = ();
-
-    fn handle(&mut self, msg: ClientCommand, _ctx: &mut Context<Self>) {
-        self.0.write(Message::Text(msg.0)).unwrap();
-    }
-}
-
-/// Handle server websocket messages
-impl<T: 'static> StreamHandler<Frame, WsProtocolError> for ChatClient<T>
-where
-    T: AsyncRead + AsyncWrite,
-{
-    fn handle(&mut self, msg: Frame, _ctx: &mut Context<Self>) {
-        match msg {
-            Frame::Text(txt) => println!("Server: {:?}", txt),
-            _ => (),
+    /// Checks the heartbeat timeout, and sends pings to the client.
+    fn check_heartbeat(&mut self, ctx: &mut <Self as Actor>::Context) {
+        if Instant::now().duration_since(self.heartbeat) > CLIENT_TIMEOUT {
+            info!("Websocket Client heartbeat failed, disconnecting!");
+            ctx.stop();
+        } else {
+            ctx.ping("");
         }
     }
+}
 
-    fn started(&mut self, _ctx: &mut Context<Self>) {
-        println!("Connected");
-    }
+impl Actor for ClientSocket {
+    type Context = ws::WebsocketContext<Self>;
 
-    fn finished(&mut self, ctx: &mut Context<Self>) {
-        println!("Server disconnected");
-        ctx.stop()
+    /// Method is called on actor start. We start the heartbeat process here.
+    fn started(&mut self, ctx: &mut Self::Context) {
+        ctx.run_interval(HEARTBEAT_INTERVAL, ClientSocket::check_heartbeat);
     }
 }
 
-impl<T: 'static> actix::io::WriteHandler<WsProtocolError> for ChatClient<T> where
-    T: AsyncRead + AsyncWrite
-{
+/// Handler for `ws::Message`
+impl StreamHandler<ws::Message, ws::ProtocolError> for ClientSocket {
+    fn handle(&mut self, msg: ws::Message, ctx: &mut Self::Context) {
+        // process websocket messages
+        trace!("WS: {:?}", msg);
+        match msg {
+            ws::Message::Ping(msg) => {
+                self.heartbeat = Instant::now();
+                ctx.pong(&msg);
+            }
+            ws::Message::Pong(_) => {
+                self.heartbeat = Instant::now();
+            }
+            ws::Message::Text(text) => ctx.text(text),
+            ws::Message::Binary(bin) => ctx.binary(bin),
+            ws::Message::Close(_) => {
+                ctx.stop();
+            }
+            ws::Message::Nop => (),
+        }
+    }
 }
