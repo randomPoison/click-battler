@@ -1,10 +1,10 @@
 //! Logic for managing client connections.
 
+use crate::game::*;
 use actix::prelude::*;
 use actix_web_actors::ws;
 use log::*;
 use std::time::{Duration, Instant};
-use crate::game::GameController;
 
 /// How often heartbeat pings are sent
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -22,7 +22,10 @@ pub struct ClientSocket {
 
 impl ClientSocket {
     pub fn new(game_controller: Addr<GameController>) -> Self {
-        ClientSocket { heartbeat: Instant::now(), game_controller }
+        ClientSocket {
+            heartbeat: Instant::now(),
+            game_controller,
+        }
     }
 
     /// Checks the heartbeat timeout, and sends pings to the client.
@@ -39,9 +42,16 @@ impl ClientSocket {
 impl Actor for ClientSocket {
     type Context = ws::WebsocketContext<Self>;
 
-    /// Method is called on actor start. We start the heartbeat process here.
     fn started(&mut self, ctx: &mut Self::Context) {
         ctx.run_interval(HEARTBEAT_INTERVAL, ClientSocket::check_heartbeat);
+        let future = self.game_controller
+            .send(ClientConnected)
+            .into_actor(self)
+            .then(|player_id, _, _| {
+                info!("Connected client given ID {:?}", player_id);
+                fut::ok(())
+            });
+        Arbiter::spawn(future);
     }
 }
 
