@@ -6,9 +6,14 @@ use futures::{
 use log::*;
 use runtime::time::Interval;
 use std::{collections::HashMap, sync::atomic::*, time::Duration};
+use serde::{Serialize, Deserialize};
+
+/// A channel that takes parameters and returns a response.
+type ResponseChannel<Params, Response> = mpsc::UnboundedSender<(Params, oneshot::Sender<Response>)>;
 
 #[derive(Debug)]
 pub struct GameController {
+    clients: HashMap<PlayerId, ClientHandle>,
     players: HashMap<PlayerId, Player>,
     id_counter: AtomicU64,
 }
@@ -18,6 +23,7 @@ impl GameController {
         let (client_connected_sender, client_connected_receiver) = mpsc::unbounded();
 
         let mut controller = GameController {
+            clients: HashMap::new(),
             players: HashMap::new(),
             id_counter: AtomicU64::new(0),
         };
@@ -33,9 +39,10 @@ impl GameController {
             loop {
                 select! {
                     _ = health_tick.next() => controller.tick_player_health(),
-                    result_sender = client_connected.next() => {
-                        let result = controller.handle_client_connected();
-                        result_sender.unwrap().send(result).expect("Failed to send result of client connected");
+                    message = client_connected.next() => {
+                        let (client_handle, result_sender) = message.expect("Lost connection with new client channel");
+                        let result = controller.handle_client_connected(client_handle);
+                        result_sender.send(result).expect("Failed to send result of client connected");
                     }
                 }
             }
@@ -63,7 +70,7 @@ impl GameController {
             }
         }
 
-        // Notify all connected clients of the dead player.
+        // TODO: Broadcast updated health to all players.
 
         // At the end of the frame, remove any players that have died and notify the clients.
         for id in dead_players.drain(..) {
@@ -73,24 +80,20 @@ impl GameController {
         }
     }
 
-    fn handle_client_connected(&mut self) -> PlayerHandle {
+    fn handle_client_connected(&mut self, client_handle: ClientHandle) -> Player {
         let id = self.next_player_id();
-        let (update_sender, update_receiver) = mpsc::channel(10);
-
         info!("New client connected, assigning ID: {:?}", id);
 
         // Create a new player for the client and add it to the set of players.
+        self.clients.insert(id, client_handle);
+
         let player = Player {
             id,
             health: 10,
-            update: update_sender,
         };
-        self.players.insert(id, player);
+        self.players.insert(id, player.clone());
 
-        PlayerHandle {
-            id,
-            update: update_receiver,
-        }
+        player
     }
 }
 
@@ -98,16 +101,17 @@ impl GameController {
 /// with the controller asynchronously.
 #[derive(Debug, Clone)]
 pub struct ControllerHandle {
-    client_connected: mpsc::UnboundedSender<oneshot::Sender<PlayerHandle>>,
+    client_connected: ResponseChannel<ClientHandle, Player>,
 }
 
 impl ControllerHandle {
-    pub async fn client_connected(&mut self) -> PlayerHandle {
+    /// Creates a new client connection, and returns the initial state of the player created for the client.
+    pub async fn client_connected(&mut self, client: ClientHandle) -> Player {
         let (result_sender, result_receiver) = oneshot::channel();
 
         // Send the message to the client controller.
         self.client_connected
-            .send(result_sender)
+            .send((client, result_sender))
             .await
             .expect("Failed to send client connected message to controller");
 
@@ -118,21 +122,34 @@ impl ControllerHandle {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PlayerId(u64);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Player {
     pub id: PlayerId,
 
     // The player's current health.
     pub health: u32,
-
-    pub update: mpsc::Sender<()>,
 }
 
 #[derive(Debug)]
-pub struct PlayerHandle {
-    pub id: PlayerId,
+pub struct Client {
     pub update: mpsc::Receiver<()>,
+}
+
+impl Client {
+    pub fn new() -> (Self, ClientHandle) {
+        let (update_sender, update_receiver) = mpsc::channel(10);
+
+        let client = Client { update: update_receiver };
+        let handle = ClientHandle { update: update_sender };
+
+        (client, handle)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ClientHandle {
+    update: mpsc::Sender<()>,
 }

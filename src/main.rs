@@ -45,14 +45,23 @@ async fn client_connected(ws: WebSocket, mut handle: ControllerHandle) {
     debug!("Running client connection logic");
 
     // Split the socket into a sender and receiver of messages.
-    let (_socket_sender, socket_receiver) = ws.sink_compat().split();
+    let (mut socket_sender, socket_receiver) = ws.sink_compat().split();
+
+    let (client, client_handle) = Client::new();
 
     // Allow the game state to handle the newly-connected client.
-    let player_handle = handle.client_connected().await;
-    info!("New client connected, assigned ID {:?}", player_handle.id);
+    let player = handle.client_connected(client_handle).await;
+    info!("New client connected, assigned ID {:?}", player.id);
+
+    // Send the client the initial state of the player.
+    let player_json = serde_json::to_string(&player).unwrap();
+    socket_sender
+        .send(Message::text(player_json))
+        .await
+        .expect("Failed to send client initial player state");
 
     // Fuse and pin the streams so that we can select over them.
-    let update_receiver = player_handle.update.fuse();
+    let update_receiver = client.update.fuse();
     let socket_receiver = socket_receiver.fuse();
     pin_mut!(update_receiver, socket_receiver);
 
@@ -61,7 +70,7 @@ async fn client_connected(ws: WebSocket, mut handle: ControllerHandle) {
             update = update_receiver.next() => match update {
                 Some(update) => info!("Received message from controller: {:?}", update),
                 None => {
-                    info!("{:?} update channel dropped, looks like we dead", player_handle.id);
+                    info!("{:?} update channel dropped, looks like we dead", player.id);
                     break;
                 }
             },
