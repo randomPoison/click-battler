@@ -86,7 +86,9 @@ impl GameController {
         // Broadcast updated health to all players.
         broadcast_update(
             self.clients.values_mut(),
-            GameUpdate::WorldUpdate(&self.players),
+            GameUpdate::WorldUpdate {
+                players: &self.players,
+            },
         )
         .await;
 
@@ -94,7 +96,7 @@ impl GameController {
         for id in dead_players.drain(..) {
             self.players.remove(&id);
 
-            broadcast_update(self.clients.values_mut(), GameUpdate::PlayerDied(id)).await;
+            broadcast_update(self.clients.values_mut(), GameUpdate::PlayerDied { id }).await;
         }
     }
 
@@ -106,7 +108,11 @@ impl GameController {
         self.players.insert(id, player.clone());
 
         // Broadcast the new player to any existing clients.
-        broadcast_update(self.clients.values_mut(), GameUpdate::PlayerJoined(player)).await;
+        broadcast_update(
+            self.clients.values_mut(),
+            GameUpdate::PlayerJoined { player },
+        )
+        .await;
 
         // Create a new player for the client and add it to the set of players.
         self.clients.insert(id, client_handle);
@@ -192,10 +198,19 @@ pub struct ClientHandle {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(tag = "type")]
 pub enum GameUpdate<'a> {
-    PlayerJoined(Player),
-    PlayerDied(PlayerId),
-    WorldUpdate(&'a HashMap<PlayerId, Player>),
+    PlayerJoined {
+        player: Player,
+    },
+
+    PlayerDied {
+        id: PlayerId,
+    },
+
+    WorldUpdate {
+        players: &'a HashMap<PlayerId, Player>,
+    },
 }
 
 async fn broadcast_update(

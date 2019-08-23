@@ -3,16 +3,26 @@
 <html>
 
 <head>
-  <title>Warp Chat</title>
+  <title>Mini Battler</title>
+  <script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
 </head>
 
 <body>
-  <h1>warp chat</h1>
-  <div id="chat">
-    <p><em>Connecting...</em></p>
+  <div id="app">
+    <h1>Mini Battler</h1>
+    <div id="connecting" v-if="!connected || id === null">
+      <p><em>Connecting...</em></p>
+    </div>
+
+    <div id="game" v-else>
+      <p>Player {{ id }}</p>
+
+      <div v-if="players[id] != null">
+        <p>Health: {{ players[id].health }}</p>
+        <button type="button" v-on:click="healSelf">Health +1</button>
+      </div>
+    </div>
   </div>
-  <input type="text" id="text" />
-  <button type="button" id="send">Send</button>
 
   <script src="script/index.js"></script>
 </body>

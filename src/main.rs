@@ -50,8 +50,14 @@ async fn client_connected(ws: WebSocket, mut handle: ControllerHandle) {
     // Allow the game state to handle the newly-connected client.
     let (player_id, init_state) = handle.client_connected(client_handle).await;
     info!("New client connected, assigned ID {:?}", player_id);
+    debug!("Initial state for {:?}: {}", player_id, init_state);
 
-    // Send the client the initial state of the player.
+    socket_sender
+        .send(Message::text(serde_json::to_string(&player_id).unwrap()))
+        .await
+        .expect("Failed to send client player ID");
+
+    // Send the client the initial world state.
     socket_sender
         .send(Message::text(init_state))
         .await
