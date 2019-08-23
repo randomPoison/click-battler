@@ -22,8 +22,10 @@
         <button type="button" v-on:click="healSelf">Health +1</button>
 
         <ul>
-          <li v-for="(player, player_id) in players" v-if="id != player_id">
-            Player {{ player_id }}, Health: {{ player.health }}
+          <li v-for="player in players" v-if="id != player.id">
+            <button v-on:click="attackPlayer(player.id)">
+              Player {{ player.id }}, Health: {{ player.health }}
+            </button>
           </li>
         </ul>
       </div>

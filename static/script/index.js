@@ -9,8 +9,12 @@ var app = new Vue({
 
     methods: {
         healSelf: function () {
-            // TODO: Send message to server to heal player.
+            ws.send(JSON.stringify({ type: 'HealSelf' }));
         },
+
+        attackPlayer: function (targetId) {
+            ws.send(JSON.stringify({ type: 'AttackPlayer', target: targetId }));
+        }
     }
 });
 

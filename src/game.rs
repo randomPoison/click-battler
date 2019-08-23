@@ -213,6 +213,14 @@ pub enum GameUpdate<'a> {
     },
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum ClientMessage {
+    HealSelf,
+
+    AttackPlayer { target: PlayerId },
+}
+
 async fn broadcast_update(
     clients: impl Iterator<Item = &mut ClientHandle>,
     update: GameUpdate<'_>,

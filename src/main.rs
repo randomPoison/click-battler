@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use crate::game::*;
 use futures::{compat::*, pin_mut, prelude::*, select};
 use log::*;
@@ -82,7 +84,22 @@ async fn client_connected(ws: WebSocket, mut handle: ControllerHandle) {
             },
 
             socket_message = socket_receiver.next() => match socket_message {
-                Some(socket_message) => info!("Received message from socket: {:?}", socket_message),
+                Some(message) => {
+                    let message = message.expect("Error receiving socket message");
+                    let message = match message.to_str() {
+                        Ok(message) => message,
+                        Err(_) => continue,
+                    };
+
+                    trace!("Received message from socket: {:?}", message);
+                    let message = match serde_json::from_str::<ClientMessage>(&message) {
+                        Ok(message) => message,
+                        Err(err) => {debug!("Failed to deserialize client message: {}", err); continue;}
+                    };
+
+                    debug!("Received message from player {:?}: {:?}", player_id, message);
+                },
+
                 None => {
                     info!("{:?} socket disconnected", player_id);
                     break;
