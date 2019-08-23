@@ -26,6 +26,7 @@ impl GameController {
     pub fn start() -> ControllerHandle {
         let (client_connected_sender, client_connected_receiver) = mpsc::unbounded();
         let (client_disconnected_sender, client_disconnected_receiver) = mpsc::unbounded();
+        let (client_message_sender, client_message_receiver) = mpsc::unbounded();
 
         let mut controller = GameController {
             clients: HashMap::new(),
@@ -36,12 +37,14 @@ impl GameController {
         let handle = ControllerHandle {
             client_connected: client_connected_sender,
             client_disconnected: client_disconnected_sender,
+            client_message: client_message_sender,
         };
 
         runtime::spawn(async move {
             let mut health_tick = Interval::new(Duration::from_secs(1)).fuse();
             let mut client_connected = client_connected_receiver.fuse();
             let mut client_disconnected = client_disconnected_receiver.fuse();
+            let mut client_message = client_message_receiver.fuse();
 
             loop {
                 select! {
@@ -56,6 +59,11 @@ impl GameController {
                     message = client_disconnected.next() => {
                         let id = message.expect("Lost connection with client channel");
                         controller.client_disconnected(id);
+                    }
+
+                    message = client_message.next() => {
+                        let (player_id, message) = message.expect("Lost connection with client channel");
+                        controller.client_message(player_id, message).await;
                     }
                 }
             }
@@ -126,6 +134,43 @@ impl GameController {
         trace!("Removing client connection for {:?}", id);
         self.clients.remove(&id);
     }
+
+    async fn client_message(&mut self, player_id: PlayerId, message: ClientMessage) {
+        // Verify that the acting player is still alive.
+        if !self.players.contains_key(&player_id) {
+            return;
+        }
+
+        match message {
+            ClientMessage::HealSelf => {
+                let player = self.players.get_mut(&player_id).unwrap();
+                player.health += 1;
+            }
+
+            ClientMessage::AttackPlayer { target } => {
+                if let Some(player) = self.players.get_mut(&target) {
+                    player.health -= 1;
+
+                    if player.health == 0 {
+                        self.players.remove(&target);
+                        broadcast_update(
+                            self.clients.values_mut(),
+                            GameUpdate::PlayerDied { id: target },
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
+
+        broadcast_update(
+            self.clients.values_mut(),
+            GameUpdate::WorldUpdate {
+                players: &self.players,
+            },
+        )
+        .await;
+    }
 }
 
 /// A handle to the game controller, exposing functionality for communicating
@@ -134,6 +179,7 @@ impl GameController {
 pub struct ControllerHandle {
     client_connected: ResponseChannel<ClientHandle, (PlayerId, String)>,
     client_disconnected: mpsc::UnboundedSender<PlayerId>,
+    client_message: mpsc::UnboundedSender<(PlayerId, ClientMessage)>,
 }
 
 impl ControllerHandle {
@@ -156,6 +202,13 @@ impl ControllerHandle {
     pub async fn client_disconnected(&mut self, client: PlayerId) {
         self.client_disconnected
             .send(client)
+            .await
+            .expect("Lost connection to game controller");
+    }
+
+    pub async fn client_message(&mut self, player: PlayerId, message: ClientMessage) {
+        self.client_message
+            .send((player, message))
             .await
             .expect("Lost connection to game controller");
     }

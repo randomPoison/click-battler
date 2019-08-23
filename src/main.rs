@@ -98,6 +98,7 @@ async fn client_connected(ws: WebSocket, mut handle: ControllerHandle) {
                     };
 
                     debug!("Received message from player {:?}: {:?}", player_id, message);
+                    handle.client_message(player_id, message).await;
                 },
 
                 None => {
