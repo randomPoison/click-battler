@@ -20,6 +20,12 @@
       <div v-if="players[id] != null">
         <p>Health: {{ players[id].health }}</p>
         <button type="button" v-on:click="healSelf">Health +1</button>
+
+        <ul>
+          <li v-for="(player, player_id) in players" v-if="id != player_id">
+            Player {{ player_id }}, Health: {{ player.health }}
+          </li>
+        </ul>
       </div>
     </div>
   </div>
