@@ -25,6 +25,7 @@ pub struct GameController {
 impl GameController {
     pub fn start() -> ControllerHandle {
         let (client_connected_sender, client_connected_receiver) = mpsc::unbounded();
+        let (client_disconnected_sender, client_disconnected_receiver) = mpsc::unbounded();
 
         let mut controller = GameController {
             clients: HashMap::new(),
@@ -34,19 +35,27 @@ impl GameController {
 
         let handle = ControllerHandle {
             client_connected: client_connected_sender,
+            client_disconnected: client_disconnected_sender,
         };
 
         runtime::spawn(async move {
             let mut health_tick = Interval::new(Duration::from_secs(1)).fuse();
             let mut client_connected = client_connected_receiver.fuse();
+            let mut client_disconnected = client_disconnected_receiver.fuse();
 
             loop {
                 select! {
                     _ = health_tick.next() => controller.tick_player_health().await,
+
                     message = client_connected.next() => {
                         let (client_handle, result_sender) = message.expect("Lost connection with new client channel");
                         let result = controller.handle_client_connected(client_handle).await;
                         result_sender.send(result).expect("Failed to send result of client connected");
+                    }
+
+                    message = client_disconnected.next() => {
+                        let id = message.expect("Lost connection with client channel");
+                        controller.client_disconnected(id);
                     }
                 }
             }
@@ -106,6 +115,11 @@ impl GameController {
         let world_state = serde_json::to_string(&self.players).unwrap();
         (id, world_state)
     }
+
+    fn client_disconnected(&mut self, id: PlayerId) {
+        trace!("Removing client connection for {:?}", id);
+        self.clients.remove(&id);
+    }
 }
 
 /// A handle to the game controller, exposing functionality for communicating
@@ -113,6 +127,7 @@ impl GameController {
 #[derive(Debug, Clone)]
 pub struct ControllerHandle {
     client_connected: ResponseChannel<ClientHandle, (PlayerId, String)>,
+    client_disconnected: mpsc::UnboundedSender<PlayerId>,
 }
 
 impl ControllerHandle {
@@ -124,12 +139,19 @@ impl ControllerHandle {
         self.client_connected
             .send((client, result_sender))
             .await
-            .expect("Failed to send client connected message to controller");
+            .expect("Lost connection to game controller");
 
         // Wait for the controller to respond with the result.
         result_receiver
             .await
-            .expect("Failed to receive player ID for new client connection")
+            .expect("Lost connection to game controller")
+    }
+
+    pub async fn client_disconnected(&mut self, client: PlayerId) {
+        self.client_disconnected
+            .send(client)
+            .await
+            .expect("Lost connection to game controller");
     }
 }
 

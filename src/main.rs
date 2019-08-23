@@ -85,7 +85,8 @@ async fn client_connected(ws: WebSocket, mut handle: ControllerHandle) {
         }
     }
 
-    // TODO: Notify the game controller that the client has disconnected.
+    // Notify the game controller that the client has disconnected.
+    handle.client_disconnected(player_id).await;
 
     trace!("Exiting client controller task");
 }
