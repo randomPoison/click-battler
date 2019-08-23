@@ -1,7 +1,6 @@
 use crate::game::*;
-use futures::{select, pin_mut, channel::mpsc, compat::*, prelude::*};
+use futures::{compat::*, pin_mut, prelude::*, select};
 use log::*;
-use std::sync::{Arc, Mutex};
 use warp::{
     ws::{Message, WebSocket},
     Filter,
@@ -9,31 +8,27 @@ use warp::{
 
 mod game;
 
-// TODO: Don't pass around references to the state, use channels to communicate with it.
-type State = Arc<Mutex<GameController>>;
-
 #[runtime::main(runtime_tokio::Tokio)]
 async fn main() {
-    std::env::set_var(
-        "RUST_LOG",
-        "click_battler=trace",
-    );
+    std::env::set_var("RUST_LOG", "click_battler=debug");
     env_logger::init();
 
-    // Keep track of all connected users, key is usize, value
-    // is a websocket sender.
-    let users = Arc::new(Mutex::new(GameController::new()));
-    // Turn our "state" into a new Filter...
-    let users = warp::any().map(move || users.clone());
+    debug!("test log");
+
+    // Create the game state and spawn the main game loop, keeping the controller
+    // handle so that we can pass it to the client tasks that we spawn.
+    let handle = GameController::start();
 
     // GET /chat -> websocket upgrade
     let chat = warp::path("chat")
         // The `ws2()` filter will prepare Websocket handshake...
         .and(warp::ws2())
-        .and(users)
-        .map(|ws: warp::ws::Ws2, users| {
+        .map(move |ws: warp::ws::Ws2| {
             // This will call our function if the handshake succeeds.
-            ws.on_upgrade(move |socket| Compat::new(Box::pin(user_connected(socket, users).map(|_| Ok(())))))
+            let handle = handle.clone();
+            ws.on_upgrade(move |socket| {
+                Compat::new(Box::pin(client_connected(socket, handle).map(|_| Ok(()))))
+            })
         });
 
     // GET / -> index html
@@ -46,27 +41,30 @@ async fn main() {
         .expect("I guess an error happened in the server");
 }
 
-async fn user_connected(ws: WebSocket, state: State) {
-    // Create a channel for receiving messages from the server.
-    let (server_sender, mut server_receiver) = mpsc::unbounded();
+async fn client_connected(ws: WebSocket, mut handle: ControllerHandle) {
+    debug!("Running client connection logic");
 
     // Split the socket into a sender and receiver of messages.
-    let (mut socket_sender, mut socket_receiver) = ws.sink_compat().split();
+    let (_socket_sender, socket_receiver) = ws.sink_compat().split();
 
     // Allow the game state to handle the newly-connected client.
-    let player_id = state.lock().unwrap().handle_client_connected(server_sender);
-    info!("New client connected, assigned ID {:?}", player_id);
+    let player_handle = handle.client_connected().await;
+    info!("New client connected, assigned ID {:?}", player_handle.id);
 
-    let server_receiver = server_receiver.fuse();
+    // Fuse and pin the streams so that we can select over them.
+    let update_receiver = player_handle.update.fuse();
     let socket_receiver = socket_receiver.fuse();
-
-    pin_mut!(server_receiver, socket_receiver);
+    pin_mut!(update_receiver, socket_receiver);
 
     loop {
         select! {
-            server_message = server_receiver.next() => {
-                info!("Received message from server: {:?}", server_message);
-            }
+            update = update_receiver.next() => match update {
+                Some(update) => info!("Received message from controller: {:?}", update),
+                None => {
+                    info!("{:?} update channel dropped, looks like we dead", player_handle.id);
+                    break;
+                }
+            },
 
             socket_message = socket_receiver.next() => {
                 info!("Received message from socket: {:?}", socket_message);
@@ -76,6 +74,5 @@ async fn user_connected(ws: WebSocket, state: State) {
         }
     }
 
-    // Stream closed up, so remove from the user list.
-    state.lock().unwrap().handle_client_disconnected(player_id);
+    unimplemented!("TODO: Handle client disconnected");
 }
