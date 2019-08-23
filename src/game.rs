@@ -5,16 +5,20 @@ use futures::{
 };
 use log::*;
 use runtime::time::Interval;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::atomic::*, time::Duration};
-use serde::{Serialize, Deserialize};
 
 /// A channel that takes parameters and returns a response.
 type ResponseChannel<Params, Response> = mpsc::UnboundedSender<(Params, oneshot::Sender<Response>)>;
 
 #[derive(Debug)]
 pub struct GameController {
+    /// The set of connected clients. Used to broadcast updates to the game state.
     clients: HashMap<PlayerId, ClientHandle>,
+
+    /// State data for all players.
     players: HashMap<PlayerId, Player>,
+
     id_counter: AtomicU64,
 }
 
@@ -38,7 +42,7 @@ impl GameController {
 
             loop {
                 select! {
-                    _ = health_tick.next() => controller.tick_player_health(),
+                    _ = health_tick.next() => controller.tick_player_health().await,
                     message = client_connected.next() => {
                         let (client_handle, result_sender) = message.expect("Lost connection with new client channel");
                         let result = controller.handle_client_connected(client_handle).await;
@@ -56,7 +60,7 @@ impl GameController {
         PlayerId(id)
     }
 
-    fn tick_player_health(&mut self) {
+    async fn tick_player_health(&mut self) {
         trace!("Ticking player health");
 
         let mut dead_players = Vec::new();
@@ -70,13 +74,18 @@ impl GameController {
             }
         }
 
-        // TODO: Broadcast updated health to all players.
+        // Broadcast updated health to all players.
+        broadcast_update(
+            self.clients.values_mut(),
+            GameUpdate::WorldUpdate(&self.players),
+        )
+        .await;
 
         // At the end of the frame, remove any players that have died and notify the clients.
         for id in dead_players.drain(..) {
             self.players.remove(&id);
 
-            // TODO: Broadcast to clients that a player died.
+            broadcast_update(self.clients.values_mut(), GameUpdate::PlayerDied(id)).await;
         }
     }
 
@@ -84,19 +93,11 @@ impl GameController {
         let id = self.next_player_id();
         info!("New client connected, assigning ID: {:?}", id);
 
-        let player = Player {
-            id,
-            health: 10,
-        };
+        let player = Player { id, health: 10 };
         self.players.insert(id, player.clone());
 
         // Broadcast the new player to any existing clients.
-        let update = serde_json::to_string(&GameUpdate::PlayerJoined(player)).unwrap();
-        for client in self.clients.values_mut() {
-            // NOTE: We discard the result here because we will handle disconnected
-            // clients elsewhere.
-            let _ = client.update.send(update.clone()).await;
-        }
+        broadcast_update(self.clients.values_mut(), GameUpdate::PlayerJoined(player)).await;
 
         // Create a new player for the client and add it to the set of players.
         self.clients.insert(id, client_handle);
@@ -152,8 +153,12 @@ impl Client {
     pub fn new() -> (Self, ClientHandle) {
         let (update_sender, update_receiver) = mpsc::channel(10);
 
-        let client = Client { update: update_receiver };
-        let handle = ClientHandle { update: update_sender };
+        let client = Client {
+            update: update_receiver,
+        };
+        let handle = ClientHandle {
+            update: update_sender,
+        };
 
         (client, handle)
     }
@@ -169,4 +174,19 @@ pub enum GameUpdate<'a> {
     PlayerJoined(Player),
     PlayerDied(PlayerId),
     WorldUpdate(&'a HashMap<PlayerId, Player>),
+}
+
+async fn broadcast_update(
+    clients: impl Iterator<Item = &mut ClientHandle>,
+    update: GameUpdate<'_>,
+) {
+    // Serialize the update so that we can send it.
+    let update = serde_json::to_string(&update).unwrap();
+
+    // TODO: Send all updates concurrently.
+    for client in clients {
+        // NOTE: We discard the result here because we will handle disconnected
+        // clients elsewhere.
+        let _ = client.update.send(update.clone()).await;
+    }
 }
