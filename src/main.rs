@@ -13,8 +13,6 @@ async fn main() {
     std::env::set_var("RUST_LOG", "click_battler=debug");
     env_logger::init();
 
-    debug!("test log");
-
     // Create the game state and spawn the main game loop, keeping the controller
     // handle so that we can pass it to the client tasks that we spawn.
     let handle = GameController::start();
@@ -42,7 +40,7 @@ async fn main() {
 }
 
 async fn client_connected(ws: WebSocket, mut handle: ControllerHandle) {
-    debug!("Running client connection logic");
+    trace!("Entering client controller task");
 
     // Split the socket into a sender and receiver of messages.
     let (mut socket_sender, socket_receiver) = ws.sink_compat().split();
@@ -50,13 +48,12 @@ async fn client_connected(ws: WebSocket, mut handle: ControllerHandle) {
     let (client, client_handle) = Client::new();
 
     // Allow the game state to handle the newly-connected client.
-    let player = handle.client_connected(client_handle).await;
-    info!("New client connected, assigned ID {:?}", player.id);
+    let (player_id, init_state) = handle.client_connected(client_handle).await;
+    info!("New client connected, assigned ID {:?}", player_id);
 
     // Send the client the initial state of the player.
-    let player_json = serde_json::to_string(&player).unwrap();
     socket_sender
-        .send(Message::text(player_json))
+        .send(Message::text(init_state))
         .await
         .expect("Failed to send client initial player state");
 
@@ -68,20 +65,27 @@ async fn client_connected(ws: WebSocket, mut handle: ControllerHandle) {
     loop {
         select! {
             update = update_receiver.next() => match update {
-                Some(update) => info!("Received message from controller: {:?}", update),
-                None => {
-                    info!("{:?} update channel dropped, looks like we dead", player.id);
-                    break;
+                Some(update) => {
+                    // NOTE: We discard the result here because this will only fail if we have
+                    // disconnected from the socket, which we will handle the next time we attempt
+                    // to receive from the socket.
+                    let _ = socket_sender.send(Message::text(update)).await;
                 }
+
+                None => panic!("Client {:?} lost connection with game controller", player_id),
             },
 
-            socket_message = socket_receiver.next() => {
-                info!("Received message from socket: {:?}", socket_message);
+            socket_message = socket_receiver.next() => match socket_message {
+                Some(socket_message) => info!("Received message from socket: {:?}", socket_message),
+                None => {
+                    info!("{:?} socket disconnected", player_id);
+                    break;
+                }
             }
-
-            complete => break,
         }
     }
 
-    unimplemented!("TODO: Handle client disconnected");
+    // TODO: Notify the game controller that the client has disconnected.
+
+    trace!("Exiting client controller task");
 }

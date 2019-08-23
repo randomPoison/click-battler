@@ -41,7 +41,7 @@ impl GameController {
                     _ = health_tick.next() => controller.tick_player_health(),
                     message = client_connected.next() => {
                         let (client_handle, result_sender) = message.expect("Lost connection with new client channel");
-                        let result = controller.handle_client_connected(client_handle);
+                        let result = controller.handle_client_connected(client_handle).await;
                         result_sender.send(result).expect("Failed to send result of client connected");
                     }
                 }
@@ -80,12 +80,9 @@ impl GameController {
         }
     }
 
-    fn handle_client_connected(&mut self, client_handle: ClientHandle) -> Player {
+    async fn handle_client_connected(&mut self, client_handle: ClientHandle) -> (PlayerId, String) {
         let id = self.next_player_id();
         info!("New client connected, assigning ID: {:?}", id);
-
-        // Create a new player for the client and add it to the set of players.
-        self.clients.insert(id, client_handle);
 
         let player = Player {
             id,
@@ -93,7 +90,20 @@ impl GameController {
         };
         self.players.insert(id, player.clone());
 
-        player
+        // Broadcast the new player to any existing clients.
+        let update = serde_json::to_string(&GameUpdate::PlayerJoined(player)).unwrap();
+        for client in self.clients.values_mut() {
+            // NOTE: We discard the result here because we will handle disconnected
+            // clients elsewhere.
+            let _ = client.update.send(update.clone()).await;
+        }
+
+        // Create a new player for the client and add it to the set of players.
+        self.clients.insert(id, client_handle);
+
+        // Return the ID of the new player and the current state of the world to the client.
+        let world_state = serde_json::to_string(&self.players).unwrap();
+        (id, world_state)
     }
 }
 
@@ -101,12 +111,12 @@ impl GameController {
 /// with the controller asynchronously.
 #[derive(Debug, Clone)]
 pub struct ControllerHandle {
-    client_connected: ResponseChannel<ClientHandle, Player>,
+    client_connected: ResponseChannel<ClientHandle, (PlayerId, String)>,
 }
 
 impl ControllerHandle {
     /// Creates a new client connection, and returns the initial state of the player created for the client.
-    pub async fn client_connected(&mut self, client: ClientHandle) -> Player {
+    pub async fn client_connected(&mut self, client: ClientHandle) -> (PlayerId, String) {
         let (result_sender, result_receiver) = oneshot::channel();
 
         // Send the message to the client controller.
@@ -135,7 +145,7 @@ pub struct Player {
 
 #[derive(Debug)]
 pub struct Client {
-    pub update: mpsc::Receiver<()>,
+    pub update: mpsc::Receiver<String>,
 }
 
 impl Client {
@@ -151,5 +161,12 @@ impl Client {
 
 #[derive(Debug, Clone)]
 pub struct ClientHandle {
-    update: mpsc::Sender<()>,
+    update: mpsc::Sender<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub enum GameUpdate<'a> {
+    PlayerJoined(Player),
+    PlayerDied(PlayerId),
+    WorldUpdate(&'a HashMap<PlayerId, Player>),
 }
