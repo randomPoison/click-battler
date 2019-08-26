@@ -7,8 +7,12 @@ use warp::{
     ws::{Message, WebSocket},
     Filter,
 };
+use std::net::SocketAddr;
 
 mod game;
+
+static TEST_ADDR: &str = "127.0.0.1:3030";
+static RELEASE_ADDR: &str = "0.0.0.0:3030";
 
 #[runtime::main(runtime_tokio::Tokio)]
 async fn main() {
@@ -36,7 +40,8 @@ async fn main() {
 
     let routes = index.or(chat);
 
-    runtime::spawn(warp::serve(routes).bind(([127, 0, 0, 1], 3030)).compat())
+    let addr: SocketAddr = RELEASE_ADDR.parse().unwrap();
+    runtime::spawn(warp::serve(routes).bind(addr).compat())
         .await
         .expect("I guess an error happened in the server");
 }
