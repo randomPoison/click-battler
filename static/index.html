@@ -4,6 +4,7 @@
 
 <head>
   <title>Mini Battler</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
 </head>
 
@@ -19,11 +20,11 @@
 
       <div v-if="players[id] != null">
         <p>Health: {{ players[id].health }}</p>
-        <button type="button" v-on:click="healSelf">Health +1</button>
+        <button style="width:100%; height: 100px;" v-on:click="healSelf">Health +1</button>
 
-        <ul>
+        <ul style="list-style: none;">
           <li v-for="player in players" v-if="id != player.id">
-            <button v-on:click="attackPlayer(player.id)">
+            <button style="width:100%; height: 75px;" v-on:click="attackPlayer(player.id)">
               Player {{ player.id }}, Health: {{ player.health }}
             </button>
           </li>
