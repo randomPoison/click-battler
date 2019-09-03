@@ -8,6 +8,7 @@ use log::*;
 use runtime::time::Interval;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::atomic::*, time::Duration};
+use warp::ws::WebSocket;
 
 /// A channel that takes parameters and returns a response.
 type ResponseChannel<Params, Response> = mpsc::UnboundedSender<(Params, oneshot::Sender<Response>)>;
@@ -110,7 +111,7 @@ impl GameController {
         }
     }
 
-    async fn handle_client_connected(&mut self, client_handle: ClientProxy) -> (PlayerId, String) {
+    pub async fn client_connected(&mut self, socket: WebSocket) {
         let id = self.next_player_id();
         info!("New client connected, assigning ID: {:?}", id);
 
@@ -137,7 +138,7 @@ impl GameController {
         self.clients.remove(&id);
     }
 
-    async fn client_message(&mut self, player_id: PlayerId, message: ClientMessage) {
+    pub async fn client_message(&mut self, player_id: PlayerId, message: ClientMessage) {
         // Verify that the acting player is still alive.
         if !self.players.contains_key(&player_id) {
             return;
