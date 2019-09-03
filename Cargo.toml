@@ -5,12 +5,14 @@ authors = ["David LeGare <dlegare.1001@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+derivative = "1.0.3"
+env_logger = "0.6.2"
 futures-preview = { version = "=0.3.0-alpha.18", features = ["compat", "async-await", "nightly"] }
 handlebars = "1.0.0"
 log = "0.4.8"
-env_logger = "0.6.2"
 runtime = { git = "https://github.com/rustasync/runtime" }
 runtime-tokio = { git = "https://github.com/rustasync/runtime" }
 serde = { version = "1.0.99", features = ["derive"] }
 serde_json = "1.0.40"
+thespian = { git = "https://github.com/randomPoison/thespian", ref = "24db80a" }
 warp = "0.1.19"

@@ -3,12 +3,14 @@
 use crate::game::*;
 use futures::{compat::*, pin_mut, prelude::*, select};
 use log::*;
+use std::net::SocketAddr;
+use thespian::Actor;
 use warp::{
     ws::{Message, WebSocket},
     Filter,
 };
-use std::net::SocketAddr;
 
+mod client;
 mod game;
 
 static TEST_ADDR: &str = "127.0.0.1:3030";
@@ -21,7 +23,7 @@ async fn main() {
 
     // Create the game state and spawn the main game loop, keeping the controller
     // handle so that we can pass it to the client tasks that we spawn.
-    let handle = GameController::start();
+    let handle = GameController::default().spawn();
 
     // GET /chat -> websocket upgrade
     let chat = warp::path("chat")
@@ -46,7 +48,7 @@ async fn main() {
         .expect("I guess an error happened in the server");
 }
 
-async fn client_connected(ws: WebSocket, mut handle: ControllerHandle) {
+async fn client_connected(ws: WebSocket, mut handle: GameControllerProxy) {
     trace!("Entering client controller task");
 
     // Split the socket into a sender and receiver of messages.
