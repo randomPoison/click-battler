@@ -14,5 +14,5 @@ runtime = { git = "https://github.com/rustasync/runtime" }
 runtime-tokio = { git = "https://github.com/rustasync/runtime" }
 serde = { version = "1.0.99", features = ["derive"] }
 serde_json = "1.0.40"
-thespian = { git = "https://github.com/randomPoison/thespian", ref = "24db80a" }
+thespian = { git = "https://github.com/randomPoison/thespian", ref = "ae869e2" }
 warp = "0.1.19"

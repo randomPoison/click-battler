@@ -75,11 +75,6 @@ impl GameController {
     //     handle
     // }
 
-    fn next_player_id(&self) -> PlayerId {
-        let id = self.id_counter.fetch_add(1, Ordering::SeqCst);
-        PlayerId(id)
-    }
-
     async fn tick_player_health(&mut self) {
         trace!("Ticking player health");
 
@@ -125,12 +120,13 @@ impl GameController {
         )
         .await;
 
-        // Create a new player for the client and add it to the set of players.
-        self.clients.insert(id, client_handle);
+        // Create the client actor to manage the client connection.
+        let client = Client::start(id, socket, self.handle());
+        self.clients.insert(id, client.clone());
 
         // Return the ID of the new player and the current state of the world to the client.
         let world_state = serde_json::to_string(&self.players).unwrap();
-        (id, world_state)
+        runtime::spawn(client.send_world_state(world_state));
     }
 
     pub fn client_disconnected(&mut self, id: PlayerId) {
@@ -173,6 +169,13 @@ impl GameController {
             },
         )
         .await;
+    }
+}
+
+impl GameController {
+    fn next_player_id(&self) -> PlayerId {
+        let id = self.id_counter.fetch_add(1, Ordering::SeqCst);
+        PlayerId(id)
     }
 }
 

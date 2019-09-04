@@ -44,6 +44,17 @@ impl Client {
     pub async fn handle_update(&mut self, update: String) {
         unimplemented!();
     }
+
+    // TODO: Bake this into the client initialization process such that it can't be
+    // called outside of the client connection flow.
+    //
+    // TODO: Don't represent the world state as a string.
+    pub async fn send_world_state(&mut self, world: String) {
+        self.sink
+            .send(ws::Message::text(world))
+            .await
+            .expect("Failed to send world state to client");
+    }
 }
 
 #[derive(Debug, Deserialize)]
