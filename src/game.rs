@@ -8,12 +8,13 @@ use log::*;
 use runtime::time::Interval;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::atomic::*, time::Duration};
+use thespian::Remote;
 use warp::ws::WebSocket;
 
 /// A channel that takes parameters and returns a response.
 type ResponseChannel<Params, Response> = mpsc::UnboundedSender<(Params, oneshot::Sender<Response>)>;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct GameController {
     /// The set of connected clients. Used to broadcast updates to the game state.
     clients: HashMap<PlayerId, ClientProxy>,
@@ -22,6 +23,19 @@ pub struct GameController {
     players: HashMap<PlayerId, Player>,
 
     id_counter: AtomicU64,
+
+    remote: Remote<Self>,
+}
+
+impl GameController {
+    pub fn new(remote: Remote<Self>) -> Self {
+        Self {
+            clients: Default::default(),
+            players: Default::default(),
+            id_counter: Default::default(),
+            remote,
+        }
+    }
 }
 
 #[thespian::actor]
@@ -121,7 +135,7 @@ impl GameController {
         .await;
 
         // Create the client actor to manage the client connection.
-        let client = Client::start(id, socket, self.handle());
+        let client = Client::start(id, socket, self.remote.proxy());
         self.clients.insert(id, client.clone());
 
         // Return the ID of the new player and the current state of the world to the client.
